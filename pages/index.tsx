@@ -12,7 +12,7 @@ import {
   SftWithToken,
   walletAdapterIdentity,
 } from "@metaplex-foundation/js"
-import { Keypair, Transaction } from "@solana/web3.js"
+import { Connection, Keypair, Transaction } from "@solana/web3.js"
 
 import {
   getRemainingAccountsForCandyGuard,
@@ -22,13 +22,25 @@ import { fromTxError } from "@/utils/errors"
 export default function Home() {
   const wallet = useWallet()
   const { publicKey } = wallet
-  const { connection } = useConnection()
+  const connection = new Connection(process.env.NEXT_PUBLIC_RPC as string)
   const [metaplex, setMetaplex] = useState<Metaplex | null>(null)
   const [candyMachine, setCandyMachine] = useState<CandyMachine | null>(null)
   const [collection, setCollection] = useState<
     Sft | SftWithToken | Nft | NftWithToken | null
   >(null)
   const [formMessage, setFormMessage] = useState<string | null>(null)
+  const [liveCounter, setLiveCounter] = useState(0); 
+  const [all_items, setallitems] = useState(0); 
+  // Initial value of the live counter
+  
+  const decrementLiveCounter = () => {
+    if (liveCounter > 0) {
+      setLiveCounter((prevCounter) => prevCounter + 1);
+    }
+  };
+
+  var remaining_items:number = 0;
+  var available_items:number = 0;
 
   useEffect(() => {
     ;(async () => {
@@ -47,16 +59,20 @@ export default function Home() {
 
         setCandyMachine(candyMachine)
 
+        remaining_items = (candyMachine.itemsRemaining.toNumber());
+        available_items = (candyMachine.itemsAvailable.toNumber());
+
+        setallitems(available_items);
+        setLiveCounter(remaining_items);
+
         const collection = await metaplex
           .nfts()
           .findByMint({ mintAddress: candyMachine.collectionMintAddress })
 
         setCollection(collection)
-
-        console.log(collection)
       }
     })()
-  }, [wallet, connection])
+  }, [wallet])
 
   /** Mints NFTs through a Candy Machine using Candy Guards */
   const handleMintV2 = async () => {
@@ -71,9 +87,16 @@ export default function Home() {
       )
     }
 
+
+    if (candyMachine.itemsRemaining.toNumber() == 0){
+      setFormMessage('No Items Remainig');
+    }
+
+
     try {
       const { remainingAccounts, additionalIxs } =
         getRemainingAccountsForCandyGuard(candyMachine, publicKey)
+      console.log(remainingAccounts)
 
       const mint = Keypair.generate()
       const { instructions } = await mintV2Instruction(
@@ -88,6 +111,7 @@ export default function Home() {
       )
 
       const tx = new Transaction()
+      console.log(tx)
 
       if (additionalIxs?.length) {
         tx.add(...additionalIxs)
@@ -95,23 +119,48 @@ export default function Home() {
 
       tx.add(...instructions)
 
-      tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash
+      tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
 
-      const txid = await wallet.sendTransaction(tx, connection, {
+    
+    var txid:string;
+    
+    try{
+      txid = await wallet.sendTransaction(tx, connection, {
         signers: [mint],
-      })
+      })    
+    }
+    catch(e){
+      setFormMessage('mint failed');
+      return
+    }
 
-      const latest = await connection.getLatestBlockhash()
-      await connection.confirmTransaction({
-        blockhash: latest.blockhash,
-        lastValidBlockHeight: latest.lastValidBlockHeight,
-        signature: txid,
-      })
+    while (true){
+      const ret = await connection.getSignatureStatus(txid!, {searchTransactionHistory:true})
+      try {
+        //@ts-ignore
+        if (ret){
+          if (ret.value && ret.value.err == null){
+            setFormMessage('mint failed');
+            break
+          } else if (ret.value && ret.value.err != null){
+            setFormMessage('successfully minted');
+            decrementLiveCounter();
+          }else{
+            continue
+          }
+        }
+      } catch(e){
+        setFormMessage('mint failed');
+        break
+      }
+
+    }
+      
     } catch (e) {
       const msg = fromTxError(e)
 
       if (msg) {
-        setFormMessage(msg.message)
+        setFormMessage(msg.message);
       }
     }
   }
@@ -193,7 +242,7 @@ export default function Home() {
                 }}
               >
                 <span style={{ fontSize: "11px" }}>Live</span>
-                <span style={{ fontSize: "11px" }}>512/1024</span>
+                <span style={{ fontSize: "11px" }}>{all_items-liveCounter}/{all_items}</span>
               </div>
               <button disabled={!publicKey} onClick={handleMintV2}>
                 mint
